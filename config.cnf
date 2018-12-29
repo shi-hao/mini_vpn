@@ -1,0 +1,11 @@
+#server ip
+ip       39.105.113.152
+
+#server port
+port     1194
+
+#tun/tap
+device   tun
+
+#client/server
+mode     client

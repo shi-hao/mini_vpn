@@ -27,7 +27,77 @@ struct ifreq ifr;
 //char client_info[info_size];
 
 
-int tun_alloc(int flags)
+#define   MAX_PARAM   2
+#define   STAT_START  0
+#define   STAT_PRE    1
+#define   Token        ' '
+typedef struct vpn_setting{
+	char * server_ip;
+	char * port;
+	char * device;
+	char * vpn_mode;
+}vpn_setting,*vpn_setting_p;
+
+static void parse_line(FILE* file, char *p[], char* str){
+	int state; 
+	int  line_len;
+	char *in;
+	char *start;
+	int  pos;
+	line_len = strlen(str) - 1;
+	in = str;
+	state = STAT_PRE;
+	pos = 0;
+	while(line_len--){
+		if(pos >= MAX_PARAM){
+			printf("param num is out of range\n");
+			break;
+		}
+		// '#' is the comment token
+		if(*in == '#'){
+			break;
+		}
+
+		// ' ' is the parameter separator
+		if(state == STAT_PRE){
+			if(*in != Token){
+				start = in;
+				state = STAT_START;
+			}
+			in++;
+		}else if(state == STAT_START){
+			if((*in == Token) || (line_len == 0)){
+				int str_len;
+				if(line_len == 0) str_len = in-start+1;
+				else str_len = in-start;
+				p[pos] =(unsigned char*)malloc(str_len + 1);
+				memcpy(p[pos], start, str_len);
+				*(p[pos] + str_len) = '\0';
+				pos++;              
+				state = STAT_PRE;
+			}
+			in++;
+		}
+	}
+}
+
+static int  parse_cmd(vpn_setting_p setting, char*p[]){
+
+	if(p[0] == NULL)
+		return -1;
+
+	if(strcmp(p[0], "ip")==0 && p[1]){
+		setting->server_ip = p[1];
+	}else if(strcmp(p[0], "port")==0 && p[1]){
+		setting->port = p[1];
+	}else if(strcmp(p[0], "device")==0 && p[1]){
+		setting->device = p[1];
+	}else if(strcmp(p[0], "mode")==0 && p[1]){
+		setting->vpn_mode = p[1];
+	}
+}
+
+static int tun_alloc(int flags)
 {
 	int fd, err;
 	char *clonedev;
@@ -50,20 +120,53 @@ int tun_alloc(int flags)
 /*
  * mini vpn main
  */
+vpn_setting msetting;
 int main(int argc, char* argv[])
 {
 #define mode_server  0
 #define mode_client  1
-	if(argc < 5){
-		printf("\n usage: ip  port  tun/tap  server/client\n ");
+
+	char* p[MAX_PARAM]={NULL};
+	FILE* file;
+	char str[BUFF_LEN];
+
+	if(argc < 2){
+		printf("\n usage: [dir][file_name]\n ");
 		exit(0);
+	}
+	/* open the vpn config file*/
+	file = fopen(argv[1], "r");
+	if(file <= 0)
+	{
+		printf("open the config file %s fail\n",argv[1]);
+		exit(-1);
+	}
+
+	//load the config file setting
+	while(fgets(str, BUFF_LEN, file)){
+		parse_line(file, p, str);
+		parse_cmd(&msetting, p);
+		free(p[0]);
+		p[0] = NULL;
+		p[1] = NULL;
 	}
 
 	printf("\n minivpn start running \n \
 			server ip   : %s\n \
 			server port : %s\n \
 			device mode : %s\n \
-			vpn mode    : %s\n", argv[1],argv[2],argv[3],argv[4]);
+			vpn mode    : %s\n", msetting.server_ip,msetting.port,msetting.device,msetting.vpn_mode);
+
+	//	if(argc < 5){
+	//		printf("\n usage: ip  port  tun/tap  server/client\n ");
+	//		exit(0);
+	//	}
+	//
+	//	printf("\n minivpn start running \n \
+	//			server ip   : %s\n \
+	//			server port : %s\n \
+	//			device mode : %s\n \
+	//			vpn mode    : %s\n", argv[1],argv[2],argv[3],argv[4]);
 
 	/*create the tun/tap device*/
 	int  tun_fd, tun_cnt;
@@ -77,11 +180,11 @@ int main(int argc, char* argv[])
 	 *
 	 IFF_NO_PI - Do not provide packet information
 	 */
-	if(strcmp("tun", argv[3]) == 0)
+	if(strcmp("tun", msetting.device) == 0)
 	{
 		tun_fd = tun_alloc(IFF_TUN | IFF_NO_PI);
 		//printf("create tun device\n");
-	}else if(strcmp("tap", argv[3]) == 0){
+	}else if(strcmp("tap", msetting.device) == 0){
 		tun_fd = tun_alloc(IFF_TAP | IFF_NO_PI);
 		//printf("create tap device\n");
 	}else{
@@ -107,10 +210,10 @@ int main(int argc, char* argv[])
 	server_addr.sin_family = AF_INET;
 	//server_addr.sin_addr.s_addr = htonl(INADDR_ANY); //IP地址，需要进行网络序转换，INADDR_ANY：本地地址
 	//server_addr.sin_port = htons(SERVER_PORT);  //端口号，需要网络序转换
-	server_addr.sin_addr.s_addr = inet_addr(argv[1]); //ip
-	server_addr.sin_port = htons(atoi(argv[2]));      //端口号，需要网络序转换
+	server_addr.sin_addr.s_addr = inet_addr(msetting.server_ip); //ip
+	server_addr.sin_port = htons(atoi(msetting.port));      //端口号，需要网络序转换
 
-	if(strcmp("server", argv[4]) == 0)
+	if(strcmp("server", msetting.vpn_mode) == 0)
 	{
 		vpn_mode = mode_server;//server
 		server_fd = socket(AF_INET, SOCK_DGRAM, 0); //AF_INET:IPV4;SOCK_DGRAM:UDP
@@ -146,7 +249,7 @@ int main(int argc, char* argv[])
 
 		socket_fd = server_fd;
 		dst_addr = src_addr;
-	}else if(strcmp("client", argv[4]) == 0){
+	}else if(strcmp("client", msetting.vpn_mode) == 0){
 		vpn_mode = mode_client;//client
 		client_fd = socket(AF_INET, SOCK_DGRAM, 0);
 		if(client_fd < 0)
