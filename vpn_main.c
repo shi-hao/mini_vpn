@@ -233,6 +233,7 @@ int main(int argc, char* argv[])
 			//block until the client connects
 			memset(sock_buf, 0, BUFF_LEN);
 			len = sizeof(src_addr);
+			printf("waiting the client connect\n");
 			sock_cnt = recvfrom(server_fd, sock_buf, BUFF_LEN, 0, (struct sockaddr*)&src_addr, &len); 
 			if(sock_cnt == -1)
 			{
