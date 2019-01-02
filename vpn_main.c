@@ -206,7 +206,7 @@ int main(int argc, char* argv[])
 	char hi_client[]="hello,client";
 	char hi_server[]="hello,server";
 
-	memset(&server_addr, 0, sizeof(server_addr));
+	bzero(&server_addr,sizeof(server_addr));
 	server_addr.sin_family = AF_INET;
 	//server_addr.sin_addr.s_addr = htonl(INADDR_ANY); //IP地址，需要进行网络序转换，INADDR_ANY：本地地址
 	//server_addr.sin_port = htons(SERVER_PORT);  //端口号，需要网络序转换
@@ -242,7 +242,8 @@ int main(int argc, char* argv[])
 			}
 
 			if(strncmp(hi_server, sock_buf, 12) == 0){
-				printf("|---receive the client[%s:%d]---|\n",inet_ntoa(src_addr.sin_addr),src_addr.sin_port); 
+				printf("|---receive the client[%s:%d]---|\n",inet_ntoa(src_addr.sin_addr),
+						ntohs(src_addr.sin_port)); 
 				sendto(server_fd, hi_client,sizeof(hi_client),0,(struct sockaddr*)&src_addr, sizeof(src_addr));
 				break;
 			}
@@ -306,14 +307,16 @@ int main(int argc, char* argv[])
 
 				//send data to socket
 				sock_cnt = sendto(fds[1].fd, tun_buf,tun_cnt,0,(struct sockaddr*)&dst_addr, sizeof(dst_addr)); 
-				printf("write %d bytes to [%s:%d]\n",sock_cnt,inet_ntoa(dst_addr.sin_addr),dst_addr.sin_port);
+				printf("write %d bytes to [%s:%d]\n",sock_cnt,inet_ntoa(dst_addr.sin_addr),
+						ntohs(dst_addr.sin_port));
 			}else if( ( fds[1].revents & POLLIN ) ==  POLLIN ){ //socket
 				//read data from socket
 				//memset(sock_buf, 0, BUFF_LEN);
 				len = sizeof(src_addr);
 				sock_cnt = recvfrom(fds[1].fd, sock_buf, BUFF_LEN, 0, (struct sockaddr*)&src_addr, &len); 
 
-				printf("read %d bytes from [%s:%d]\n",sock_cnt,inet_ntoa(src_addr.sin_addr),src_addr.sin_port);
+				printf("read %d bytes from [%s:%d]\n",sock_cnt,inet_ntoa(src_addr.sin_addr),
+						ntohs(src_addr.sin_port));
 				if(sock_cnt <= 0)
 				{
 					printf("recieve data fail!\n");
