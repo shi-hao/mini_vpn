@@ -20,7 +20,6 @@
 #include <poll.h>
 
 #define  SERVER_PORT 9000
-#define  BUFF_LEN    1024
 
 #define info_size  40
 struct ifreq ifr;
@@ -38,21 +37,18 @@ typedef struct vpn_setting{
 	char * vpn_mode;
 }vpn_setting,*vpn_setting_p;
 
-static void parse_line(FILE* file, char *p[], char* str){
+static void parse_line(char *p[], char* str){
 	int state; 
 	int  line_len;
 	char *in;
 	char *start;
 	int  pos;
 	line_len = strlen(str) - 1;
+	start =	NULL;
 	in = str;
 	state = STAT_PRE;
 	pos = 0;
 	while(line_len--){
-		if(pos >= MAX_PARAM){
-			printf("param num is out of range\n");
-			break;
-		}
 		// '#' is the comment token
 		if(*in == '#'){
 			break;
@@ -70,6 +66,10 @@ static void parse_line(FILE* file, char *p[], char* str){
 				int str_len;
 				if(line_len == 0) str_len = in-start+1;
 				else str_len = in-start;
+				if(pos >= MAX_PARAM){
+					printf("param num is out of range\n");
+					break;
+				}
 				p[pos] =(unsigned char*)malloc(str_len + 1);
 				memcpy(p[pos], start, str_len);
 				*(p[pos] + str_len) = '\0';
@@ -125,6 +125,7 @@ int main(int argc, char* argv[])
 {
 #define mode_server  0
 #define mode_client  1
+#define  BUFF_LEN    1024
 
 	char* p[MAX_PARAM]={NULL};
 	FILE* file;
@@ -135,8 +136,7 @@ int main(int argc, char* argv[])
 		exit(0);
 	}
 	/* open the vpn config file*/
-	file = fopen(argv[1], "r");
-	if(file <= 0)
+	if((file = fopen(argv[1], "r")) <= 0 )
 	{
 		printf("open the config file %s fail\n",argv[1]);
 		exit(-1);
@@ -144,13 +144,14 @@ int main(int argc, char* argv[])
 
 	//load the config file setting
 	while(fgets(str, BUFF_LEN, file)){
-		parse_line(file, p, str);
+		parse_line(p, str);
 		parse_cmd(&msetting, p);
 		free(p[0]);
 		p[0] = NULL;
 		p[1] = NULL;
 	}
 
+	//print the config info
 	printf("\n minivpn start running \n \
 			server ip   : %s\n \
 			server port : %s\n \
@@ -168,6 +169,7 @@ int main(int argc, char* argv[])
 	//			device mode : %s\n \
 	//			vpn mode    : %s\n", argv[1],argv[2],argv[3],argv[4]);
 
+	///////////////////////////////////////////////////////////////////
 	/*create the tun/tap device*/
 	int  tun_fd, tun_cnt;
 	char tun_buf[BUFF_LEN];
@@ -183,10 +185,8 @@ int main(int argc, char* argv[])
 	if(strcmp("tun", msetting.device) == 0)
 	{
 		tun_fd = tun_alloc(IFF_TUN | IFF_NO_PI);
-		//printf("create tun device\n");
 	}else if(strcmp("tap", msetting.device) == 0){
 		tun_fd = tun_alloc(IFF_TAP | IFF_NO_PI);
-		//printf("create tap device\n");
 	}else{
 		printf("parameter mode error: tun/tap\n");
 		exit(1);
@@ -202,7 +202,7 @@ int main(int argc, char* argv[])
 	int sock_cnt;
 	int vpn_mode;
 	socklen_t len;
-	char sock_buf[BUFF_LEN];  //接收缓冲区，1024字节
+	char sock_buf[BUFF_LEN];  
 	char hi_client[]="hello,client";
 	char hi_server[]="hello,server";
 
@@ -262,9 +262,11 @@ int main(int argc, char* argv[])
 
 		//send hello data to server
 		sendto(client_fd, hi_server,sizeof(hi_server), 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
+		printf("send hello to server\n");
 
 		//wait the server response
 		len = sizeof(src_addr);
+		printf("waiting the server response\n");
 		sock_cnt = recvfrom(client_fd, sock_buf, BUFF_LEN, 0, (struct sockaddr*)&src_addr, &len); 
 
 		if(strncmp(hi_client, sock_buf, 12) != 0){
@@ -277,9 +279,9 @@ int main(int argc, char* argv[])
 		dst_addr = server_addr;
 	}
 	////////////////////////////////////////////////////////
-	/*linux io multiplexing--poll() tun/tap socket*/
-#define nfds            2
-#define poll_time      -1
+	/*linux io multiplexing poll(): tun/tap fd and udp socket fd*/
+#define  nfds            2
+#define  poll_time      -1
 	int fd, poll_ret;
 	struct pollfd fds[nfds]; // tun/tap and socket fds
 
@@ -295,7 +297,7 @@ int main(int argc, char* argv[])
 		if(poll_ret == -1){ //error
 			perror("poll()");
 		}else if(poll_ret > 0){ //fds is ready
-			if( ( fds[0].revents & POLLIN ) ==  POLLIN ){ // tun设备
+			if( ( fds[0].revents & POLLIN ) ==  POLLIN ){ // tun/tap device
 				//read data from tun/tap device
 				tun_cnt = read(fds[0].fd, tun_buf, sizeof(tun_buf));
 				if (tun_cnt < 0) {
