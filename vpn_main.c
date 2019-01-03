@@ -204,7 +204,7 @@ int main(int argc, char* argv[])
 	int sock_cnt;
 	int vpn_mode;
 	socklen_t len;
-	char sock_buf[BUFF_LEN];  
+	char sock_buf[BUFF_LEN]={0};  
 	char hi_client[]="hello,client";
 	char hi_server[]="hello,server";
 
