@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <poll.h>
+#include <error.h>
 
 #define  SERVER_PORT 9000
 
@@ -126,6 +127,7 @@ int main(int argc, char* argv[])
 #define mode_server  0
 #define mode_client  1
 #define  BUFF_LEN    1024
+
 
 	char* p[MAX_PARAM]={NULL};
 	FILE* file;
@@ -246,12 +248,17 @@ int main(int argc, char* argv[])
 						ntohs(src_addr.sin_port)); 
 				sendto(server_fd, hi_client,sizeof(hi_client),0,(struct sockaddr*)&src_addr, sizeof(src_addr));
 				break;
+			}else{
+				printf(" hello handshake data error\n");
 			}
 		}
 
 		socket_fd = server_fd;
 		dst_addr = src_addr;
 	}else if(strcmp("client", msetting.vpn_mode) == 0){
+		struct timeval timeout;
+		timeout.tv_sec = 5;
+		timeout.tv_usec = 0;
 		vpn_mode = mode_client;//client
 		client_fd = socket(AF_INET, SOCK_DGRAM, 0);
 		if(client_fd < 0)
@@ -260,20 +267,28 @@ int main(int argc, char* argv[])
 			exit(-1);
 		}
 
-		//send hello data to server
-		sendto(client_fd, hi_server,sizeof(hi_server), 0, (struct sockaddr*)&server_addr, sizeof(server_addr));
-		printf("send hello to server\n");
+		while(1){
+			//send hello data to server
+			sendto(client_fd, hi_server,sizeof(hi_server), 0, (struct sockaddr*)&server_addr, 
+					sizeof(server_addr));
+			printf("send hello to server\n");
 
-		//wait the server response
-		len = sizeof(src_addr);
-		printf("waiting the server response\n");
-		sock_cnt = recvfrom(client_fd, sock_buf, BUFF_LEN, 0, (struct sockaddr*)&src_addr, &len); 
+			//wait the server response
+			if (setsockopt (client_fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0)
+				perror("setsockopt failed\n");
+			len = sizeof(src_addr);
+			printf("waiting the server response\n");
+			sock_cnt = recvfrom(client_fd, sock_buf, BUFF_LEN, 0, (struct sockaddr*)&src_addr, &len); 
 
-		if(strncmp(hi_client, sock_buf, 12) != 0){
-			printf("connect server failed\n");
-			exit(-1);
+			if(strncmp(hi_client, sock_buf, 12) == 0){
+				timeout.tv_sec = 0;
+				timeout.tv_usec = 0;
+				if (setsockopt (client_fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0)
+					perror("setsockopt failed\n");
+				printf(" mini vpn connect to server done\n");
+				break;
+			}
 		}
-		printf(" mini vpn connect to server done\n");
 
 		socket_fd = client_fd;
 		dst_addr = server_addr;
@@ -285,7 +300,7 @@ int main(int argc, char* argv[])
 	int fd, poll_ret;
 	struct pollfd fds[nfds]; // tun/tap and socket fds
 
-	fds[0].fd = tun_fd;     //tun设备
+	fds[0].fd = tun_fd;     //tun device
 	fds[1].fd = socket_fd;  //socket
 
 	fds[0].events = POLLIN; // data is ready to read
