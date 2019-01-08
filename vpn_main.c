@@ -98,6 +98,10 @@ static int  parse_cmd(vpn_setting_p setting, char*p[]){
 	}
 }
 
+#define P_CONTROL_HARD_RESET_CLIENT_V2  7     /* initial key from client, forget previous state */
+#define P_CONTROL_HARD_RESET_SERVER_V2  8
+#define P_DATA_V2                       9
+
 static int tun_alloc(int flags)
 {
 	int fd, err;
@@ -118,15 +122,34 @@ static int tun_alloc(int flags)
 	return fd;
 }
 
+#define  BUFF_LEN    1024
+typedef struct _buff_ {
+	int capacity;
+	char *buffer;
+	int offset;
+	int len;
+}st_buff, *st_buff_p;
+
+int st_buff_init(st_buff_p buff){
+	if((buff->buffer = (unsigned char*)malloc(BUFF_LEN)) != NULL){
+		buff->capacity = BUFF_LEN;
+		buff->offset = 0;
+		buff->len = 0;
+		return 0;
+	}else{
+		return -1;
+	}
+}
+
 /*
  * mini vpn main
  */
 vpn_setting msetting;
+
 int main(int argc, char* argv[])
 {
-#define mode_server  0
-#define mode_client  1
-#define  BUFF_LEN    1024
+#define  mode_server  0
+#define  mode_client  1
 
 
 	char* p[MAX_PARAM]={NULL};
@@ -160,29 +183,19 @@ int main(int argc, char* argv[])
 			device mode : %s\n \
 			vpn mode    : %s\n", msetting.server_ip,msetting.port,msetting.device,msetting.vpn_mode);
 
-	//	if(argc < 5){
-	//		printf("\n usage: ip  port  tun/tap  server/client\n ");
-	//		exit(0);
-	//	}
-	//
-	//	printf("\n minivpn start running \n \
-	//			server ip   : %s\n \
-	//			server port : %s\n \
-	//			device mode : %s\n \
-	//			vpn mode    : %s\n", argv[1],argv[2],argv[3],argv[4]);
-
 	///////////////////////////////////////////////////////////////////
 	/*create the tun/tap device*/
 	int  tun_fd, tun_cnt;
-	char tun_buf[BUFF_LEN];
-	/* Flags: 
-	   IFF_TUN
-	   - TUN device (no Ethernet headers)
-	 *
-	 IFF_TAP
-	 - TAP device
-	 *
-	 IFF_NO_PI - Do not provide packet information
+	st_buff tun_buf; 
+	if(st_buff_init(&tun_buf) < 0){
+		printf("tun_buf malloc failed exit\n");
+		return 0;
+	}
+	/* 
+	 *Flags: 
+	 *  IFF_TUN   - TUN device (no Ethernet headers)
+	 *  IFF_TAP   - TAP device
+	 *  IFF_NO_PI - Do not provide packet information
 	 */
 	if(strcmp("tun", msetting.device) == 0)
 	{
@@ -204,9 +217,14 @@ int main(int argc, char* argv[])
 	int sock_cnt;
 	int vpn_mode;
 	socklen_t len;
-	char sock_buf[BUFF_LEN]={0};  
 	char hi_client[]="hello,client";
 	char hi_server[]="hello,server";
+
+	st_buff sock_buf;  
+	if(st_buff_init(&sock_buf) < 0){
+		printf("sock_buf malloc failed exit\n");
+		return 0;
+	}
 
 	bzero(&server_addr,sizeof(server_addr));
 	server_addr.sin_family = AF_INET;
@@ -231,30 +249,30 @@ int main(int argc, char* argv[])
 			return -1;
 		}
 
-		while(1){
-			//block until the client connects
-			memset(sock_buf, 0, BUFF_LEN);
-			len = sizeof(src_addr);
-			printf("waiting the client connect\n");
-			sock_cnt = recvfrom(server_fd, sock_buf, BUFF_LEN, 0, (struct sockaddr*)&src_addr, &len); 
-			if(sock_cnt == -1)
-			{
-				printf("recvfrom client failed\n");
-				exit(0);
-			}
-
-			if(strncmp(hi_server, sock_buf, 12) == 0){
-				printf("|---receive the client[%s:%d]---|\n",inet_ntoa(src_addr.sin_addr),
-						ntohs(src_addr.sin_port)); 
-				sendto(server_fd, hi_client,sizeof(hi_client),0,(struct sockaddr*)&src_addr, sizeof(src_addr));
-				break;
-			}else{
-				printf(" hello handshake data error\n");
-			}
-		}
+		//		while(1){
+		//			//block until the client connects
+		//			memset(sock_buf, 0, BUFF_LEN);
+		//			len = sizeof(src_addr);
+		//			printf("waiting the client connect\n");
+		//			sock_cnt = recvfrom(server_fd, sock_buf, BUFF_LEN, 0, (struct sockaddr*)&src_addr, &len); 
+		//			if(sock_cnt == -1)
+		//			{
+		//				printf("recvfrom client failed\n");
+		//				exit(0);
+		//			}
+		//
+		//			if(strncmp(hi_server, sock_buf, 12) == 0){
+		//				printf("|---receive the client[%s:%d]---|\n",inet_ntoa(src_addr.sin_addr),
+		//						ntohs(src_addr.sin_port)); 
+		//				sendto(server_fd, hi_client,sizeof(hi_client),0,(struct sockaddr*)&src_addr, sizeof(src_addr));
+		//				break;
+		//			}else{
+		//				printf(" hello handshake data error\n");
+		//			}
+		//		}
 
 		socket_fd = server_fd;
-		dst_addr = src_addr;
+		//dst_addr = NULL;
 	}else if(strcmp("client", msetting.vpn_mode) == 0){
 		struct timeval timeout;
 		timeout.tv_sec = 5;
@@ -278,9 +296,10 @@ int main(int argc, char* argv[])
 				perror("setsockopt failed\n");
 			len = sizeof(src_addr);
 			printf("waiting the server response\n");
-			sock_cnt = recvfrom(client_fd, sock_buf, BUFF_LEN, 0, (struct sockaddr*)&src_addr, &len); 
+			sock_buf.len = recvfrom(client_fd, sock_buf.buffer, sock_buf.capacity, 0, 
+					(struct sockaddr*)&src_addr, &len); 
 
-			if(strncmp(hi_client, sock_buf, 12) == 0){
+			if(strncmp(hi_client, sock_buf.buffer, 12) == 0){
 				timeout.tv_sec = 0;
 				timeout.tv_usec = 0;
 				if (setsockopt (client_fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0)
@@ -314,25 +333,27 @@ int main(int argc, char* argv[])
 		}else if(poll_ret > 0){ //fds is ready
 			if( ( fds[0].revents & POLLIN ) ==  POLLIN ){ // tun/tap device
 				//read data from tun/tap device
-				tun_cnt = read(fds[0].fd, tun_buf, sizeof(tun_buf));
-				if (tun_cnt < 0) {
+				tun_buf.len = read(fds[0].fd, tun_buf.buffer, tun_buf.capacity);
+				if (tun_buf.len < 0) {
 					perror("Reading from interface");
 					close(tun_fd);
 					exit(1);
 				}
-				printf("read %d bytes from %s\n", tun_cnt, ifr.ifr_name);
+				printf("read %d bytes from %s\n", tun_buf.len, ifr.ifr_name);
 
 				//send data to socket
-				sock_cnt = sendto(fds[1].fd, tun_buf,tun_cnt,0,(struct sockaddr*)&dst_addr, sizeof(dst_addr)); 
+				sock_cnt = sendto(fds[1].fd, tun_buf.buffer,tun_buf.len,0,
+						(struct sockaddr*)&dst_addr, sizeof(dst_addr)); 
 				printf("write %d bytes to [%s:%d]\n",sock_cnt,inet_ntoa(dst_addr.sin_addr),
 						ntohs(dst_addr.sin_port));
 			}else if( ( fds[1].revents & POLLIN ) ==  POLLIN ){ //socket
 				//read data from socket
 				//memset(sock_buf, 0, BUFF_LEN);
 				len = sizeof(src_addr);
-				sock_cnt = recvfrom(fds[1].fd, sock_buf, BUFF_LEN, 0, (struct sockaddr*)&src_addr, &len); 
+				sock_buf.len = recvfrom(fds[1].fd, sock_buf.buffer, sock_buf.capacity, 0, 
+						(struct sockaddr*)&src_addr, &len); 
 
-				printf("read %d bytes from [%s:%d]\n",sock_cnt,inet_ntoa(src_addr.sin_addr),
+				printf("read %d bytes from [%s:%d]\n",sock_buf.len,inet_ntoa(src_addr.sin_addr),
 						ntohs(src_addr.sin_port));
 				if(sock_cnt <= 0)
 				{
@@ -340,9 +361,9 @@ int main(int argc, char* argv[])
 				}else{ 
 					if((vpn_mode == mode_server) && ((dst_addr.sin_addr.s_addr != src_addr.sin_addr.s_addr) || 
 								(dst_addr.sin_port != src_addr.sin_port))){
-						if(strncmp(hi_server, sock_buf, 12) == 0){
+						if(strncmp(hi_server, sock_buf.buffer, 12) == 0){
 							printf("|----receive the client [%s:%d]----|\n",
-									inet_ntoa(src_addr.sin_addr),src_addr.sin_port); 
+									inet_ntoa(src_addr.sin_addr),ntohs(src_addr.sin_port)); 
 							sendto(fds[1].fd, hi_client,sizeof(hi_client),0,
 									(struct sockaddr*)&src_addr, sizeof(src_addr));
 							dst_addr = src_addr;
@@ -352,8 +373,8 @@ int main(int argc, char* argv[])
 				}
 
 				//send data to tun/tap device
-				tun_cnt = write(fds[0].fd, sock_buf, sock_cnt);
-				printf("write %d bytes to %s\n",sock_cnt, ifr.ifr_name);
+				tun_cnt = write(fds[0].fd, sock_buf.buffer, sock_buf.len);
+				printf("write %d bytes to %s\n",tun_cnt, ifr.ifr_name);
 			}
 		}else if(poll_ret == 0){ //time out
 			printf("poll() time out\n");
