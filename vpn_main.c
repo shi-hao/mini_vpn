@@ -65,8 +65,8 @@ static void parse_line(char *p[], char* str){
 		}else if(state == STAT_START){
 			if((*in == Token) || (line_len == 0)){
 				int str_len;
-				if(line_len == 0) str_len = in-start+1;
-				else str_len = in-start;
+				if(*in == Token) str_len = in-start;
+				else str_len = in-start+1;
 				if(pos >= MAX_PARAM){
 					printf("param num is out of range\n");
 					break;
@@ -98,9 +98,96 @@ static int  parse_cmd(vpn_setting_p setting, char*p[]){
 	}
 }
 
-#define P_CONTROL_HARD_RESET_CLIENT_V2  7     /* initial key from client, forget previous state */
-#define P_CONTROL_HARD_RESET_SERVER_V2  8
-#define P_DATA_V2                       9
+#define  BUFF_LEN    2048
+typedef struct _buff_ {
+	int capacity;
+	char *buffer;
+	char *data;
+	int offset;
+	int len;
+}st_buff, *st_buff_p;
+
+int st_buff_init(st_buff_p buff){
+	if((buff->buffer = (unsigned char*)malloc(BUFF_LEN)) != NULL){
+		buff->data = buff->buffer;
+		buff->capacity = BUFF_LEN;
+		buff->offset = 0;
+		buff->len = 0;
+		return 0;
+	}else{
+		return -1;
+	}
+}
+
+int st_buff_clear(st_buff_p buff){
+	buff->data = buff->buffer;
+	buff->offset = 0;
+	buff->len = 0;
+}
+
+int st_buff_free(st_buff_p buff){
+	free(buff->buffer);
+}
+
+#define  P_CONTROL_HARD_RESET_CLIENT_V2   7     /* initial key from client, forget previous state */
+#define  P_CONTROL_HARD_RESET_SERVER_V2   8
+#define  P_DATA_V2                        9
+#define  OP_SHIFT(opcode)                 (opcode >> 3)
+
+struct ip_hdr {
+#define IPH_GET_VER(v) (((v) >> 4) & 0x0F)
+#define IPH_GET_LEN(v) (((v) & 0x0F) << 2)
+	uint8_t  version_len;
+
+	uint8_t  tos;
+	uint16_t tot_len;
+	uint16_t id;
+
+#define IP_OFFMASK 0x1fff
+	uint16_t frag_off;
+
+	uint8_t  ttl;
+
+	uint8_t  protocol;
+
+	uint16_t check;
+	uint32_t saddr;
+	uint32_t daddr;
+	/*The options start here. */
+};
+
+
+static unsigned char parse_packet(st_buff_p buff){
+	unsigned char opcode = *(buff->data) >> 3;
+	buff->data++;
+	buff->offset++;
+	buff->len--;
+
+	if(opcode == P_CONTROL_HARD_RESET_CLIENT_V2){
+		if(strncmp(buff->data, "hello,server", 12) == 0){
+			return P_CONTROL_HARD_RESET_CLIENT_V2;
+		}
+	}else if(opcode == P_CONTROL_HARD_RESET_SERVER_V2){
+		if(strncmp(buff->data, "hello,client", 12) == 0){
+			return P_CONTROL_HARD_RESET_SERVER_V2;
+		}
+	}else if(opcode == P_DATA_V2){
+		return P_DATA_V2;
+	}
+	return -1;
+}
+
+static char pack_packet(st_buff_p buff, unsigned char* data, int len, unsigned char opcode){
+	*(buff->buffer) = opcode;
+	buff->len++;
+	if((buff->capacity-1) > len){
+		memcpy(buff->buffer+1, data, len);	
+		buff->len+=len;
+		return 0;
+	}
+	return -1;
+}
+
 
 static int tun_alloc(int flags)
 {
@@ -122,24 +209,6 @@ static int tun_alloc(int flags)
 	return fd;
 }
 
-#define  BUFF_LEN    1024
-typedef struct _buff_ {
-	int capacity;
-	char *buffer;
-	int offset;
-	int len;
-}st_buff, *st_buff_p;
-
-int st_buff_init(st_buff_p buff){
-	if((buff->buffer = (unsigned char*)malloc(BUFF_LEN)) != NULL){
-		buff->capacity = BUFF_LEN;
-		buff->offset = 0;
-		buff->len = 0;
-		return 0;
-	}else{
-		return -1;
-	}
-}
 
 /*
  * mini vpn main
@@ -150,7 +219,6 @@ int main(int argc, char* argv[])
 {
 #define  mode_server  0
 #define  mode_client  1
-
 
 	char* p[MAX_PARAM]={NULL};
 	FILE* file;
@@ -203,7 +271,7 @@ int main(int argc, char* argv[])
 	}else if(strcmp("tap", msetting.device) == 0){
 		tun_fd = tun_alloc(IFF_TAP | IFF_NO_PI);
 	}else{
-		printf("parameter mode error: tun/tap\n");
+		printf("config file device mode error: tun/tap\n");
 		exit(1);
 	}
 	if (tun_fd < 0) {
@@ -217,8 +285,8 @@ int main(int argc, char* argv[])
 	int sock_cnt;
 	int vpn_mode;
 	socklen_t len;
-	char hi_client[]="hello,client";
-	char hi_server[]="hello,server";
+	char hi_client[56]={0};
+	char hi_server[56]={0};
 
 	st_buff sock_buf;  
 	if(st_buff_init(&sock_buf) < 0){
@@ -249,34 +317,9 @@ int main(int argc, char* argv[])
 			return -1;
 		}
 
-		//		while(1){
-		//			//block until the client connects
-		//			memset(sock_buf, 0, BUFF_LEN);
-		//			len = sizeof(src_addr);
-		//			printf("waiting the client connect\n");
-		//			sock_cnt = recvfrom(server_fd, sock_buf, BUFF_LEN, 0, (struct sockaddr*)&src_addr, &len); 
-		//			if(sock_cnt == -1)
-		//			{
-		//				printf("recvfrom client failed\n");
-		//				exit(0);
-		//			}
-		//
-		//			if(strncmp(hi_server, sock_buf, 12) == 0){
-		//				printf("|---receive the client[%s:%d]---|\n",inet_ntoa(src_addr.sin_addr),
-		//						ntohs(src_addr.sin_port)); 
-		//				sendto(server_fd, hi_client,sizeof(hi_client),0,(struct sockaddr*)&src_addr, sizeof(src_addr));
-		//				break;
-		//			}else{
-		//				printf(" hello handshake data error\n");
-		//			}
-		//		}
-
 		socket_fd = server_fd;
 		//dst_addr = NULL;
 	}else if(strcmp("client", msetting.vpn_mode) == 0){
-		struct timeval timeout;
-		timeout.tv_sec = 5;
-		timeout.tv_usec = 0;
 		vpn_mode = mode_client;//client
 		client_fd = socket(AF_INET, SOCK_DGRAM, 0);
 		if(client_fd < 0)
@@ -286,8 +329,14 @@ int main(int argc, char* argv[])
 		}
 
 		while(1){
+			struct timeval timeout;
+			timeout.tv_sec = 5;
+			timeout.tv_usec = 0;
+
 			//send hello data to server
-			sendto(client_fd, hi_server,sizeof(hi_server), 0, (struct sockaddr*)&server_addr, 
+			hi_server[0] = P_CONTROL_HARD_RESET_CLIENT_V2 << 3;
+			strcat(&hi_server[1],"hello,server");
+			sendto(client_fd, hi_server,strlen(hi_server), 0, (struct sockaddr*)&server_addr, 
 					sizeof(server_addr));
 			printf("send hello to server\n");
 
@@ -299,7 +348,7 @@ int main(int argc, char* argv[])
 			sock_buf.len = recvfrom(client_fd, sock_buf.buffer, sock_buf.capacity, 0, 
 					(struct sockaddr*)&src_addr, &len); 
 
-			if(strncmp(hi_client, sock_buf.buffer, 12) == 0){
+			if(parse_packet(&sock_buf) == P_CONTROL_HARD_RESET_SERVER_V2){
 				timeout.tv_sec = 0;
 				timeout.tv_usec = 0;
 				if (setsockopt (client_fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0)
@@ -330,10 +379,15 @@ int main(int argc, char* argv[])
 		poll_ret = poll(fds, nfds, poll_time);
 		if(poll_ret == -1){ //error
 			perror("poll()");
+		}else if(poll_ret == 0){
+			printf("poll() time out\n");//time out
 		}else if(poll_ret > 0){ //fds is ready
-			if( ( fds[0].revents & POLLIN ) ==  POLLIN ){ // tun/tap device
+			if((fds[0].revents & POLLIN) ==  POLLIN){ // tun/tap device
 				//read data from tun/tap device
-				tun_buf.len = read(fds[0].fd, tun_buf.buffer, tun_buf.capacity);
+				st_buff_clear(&tun_buf);
+				tun_buf.buffer[0] = P_DATA_V2 << 3;
+				tun_buf.len++;
+				tun_buf.len += read(fds[0].fd, tun_buf.buffer+1, tun_buf.capacity-1);
 				if (tun_buf.len < 0) {
 					perror("Reading from interface");
 					close(tun_fd);
@@ -342,42 +396,54 @@ int main(int argc, char* argv[])
 				printf("read %d bytes from %s\n", tun_buf.len, ifr.ifr_name);
 
 				//send data to socket
-				sock_cnt = sendto(fds[1].fd, tun_buf.buffer,tun_buf.len,0,
+				sock_cnt = sendto(fds[1].fd, tun_buf.data,tun_buf.len,0,
 						(struct sockaddr*)&dst_addr, sizeof(dst_addr)); 
 				printf("write %d bytes to [%s:%d]\n",sock_cnt,inet_ntoa(dst_addr.sin_addr),
 						ntohs(dst_addr.sin_port));
-			}else if( ( fds[1].revents & POLLIN ) ==  POLLIN ){ //socket
+			}else if((fds[1].revents & POLLIN) ==  POLLIN){ //socket
 				//read data from socket
 				//memset(sock_buf, 0, BUFF_LEN);
+				st_buff_clear(&sock_buf);
 				len = sizeof(src_addr);
 				sock_buf.len = recvfrom(fds[1].fd, sock_buf.buffer, sock_buf.capacity, 0, 
 						(struct sockaddr*)&src_addr, &len); 
-
 				printf("read %d bytes from [%s:%d]\n",sock_buf.len,inet_ntoa(src_addr.sin_addr),
 						ntohs(src_addr.sin_port));
-				if(sock_cnt <= 0)
+
+				if(sock_buf.len <= 0)
 				{
-					printf("recieve data fail!\n");
-				}else{ 
-					if((vpn_mode == mode_server) && ((dst_addr.sin_addr.s_addr != src_addr.sin_addr.s_addr) || 
-								(dst_addr.sin_port != src_addr.sin_port))){
-						if(strncmp(hi_server, sock_buf.buffer, 12) == 0){
-							printf("|----receive the client [%s:%d]----|\n",
-									inet_ntoa(src_addr.sin_addr),ntohs(src_addr.sin_port)); 
-							sendto(fds[1].fd, hi_client,sizeof(hi_client),0,
-									(struct sockaddr*)&src_addr, sizeof(src_addr));
-							dst_addr = src_addr;
-							continue;
-						}
-					}
+					printf("recvfrom data failed\n");
+					continue;
+				} 
+
+				unsigned char opcode = parse_packet(&sock_buf);
+				switch(opcode){
+					case P_CONTROL_HARD_RESET_CLIENT_V2:
+						printf("|----receive the client [%s:%d]----|\n",
+								inet_ntoa(src_addr.sin_addr),ntohs(src_addr.sin_port)); 
+						hi_client[0] = P_CONTROL_HARD_RESET_SERVER_V2 << 3;
+						strcat(&hi_client[1],"hello,client");
+						sendto(fds[1].fd, hi_client,strlen(hi_client),0,
+								(struct sockaddr*)&src_addr, sizeof(src_addr));
+						dst_addr = src_addr;
+						continue;
+						break;
+					case P_CONTROL_HARD_RESET_SERVER_V2:
+						break;
+					case P_DATA_V2:
+						break;
+					default:
+						break;
 				}
 
+				struct ip_hdr *ip_header =(struct ip_hdr*)sock_buf.data;
+				printf("saddr = %#.8x\n", ip_header->saddr);
+				printf("daddr = %#.8x\n", ip_header->daddr);
+
 				//send data to tun/tap device
-				tun_cnt = write(fds[0].fd, sock_buf.buffer, sock_buf.len);
+				tun_cnt = write(fds[0].fd, sock_buf.data, sock_buf.len);
 				printf("write %d bytes to %s\n",tun_cnt, ifr.ifr_name);
 			}
-		}else if(poll_ret == 0){ //time out
-			printf("poll() time out\n");
 		}
 	}
 
