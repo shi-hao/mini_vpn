@@ -178,7 +178,7 @@ static unsigned char parse_packet(st_buff_p buff){
 }
 
 static char pack_packet(st_buff_p buff, unsigned char* data, int len, unsigned char opcode){
-	*(buff->buffer) = opcode;
+	*(buff->buffer) = opcode << 3;
 	buff->len++;
 	if((buff->capacity-1) > len){
 		memcpy(buff->buffer+1, data, len);	
@@ -255,6 +255,7 @@ int main(int argc, char* argv[])
 	/*create the tun/tap device*/
 	int  tun_fd, tun_cnt;
 	st_buff tun_buf; 
+	unsigned char buf[BUFF_LEN];
 	if(st_buff_init(&tun_buf) < 0){
 		printf("tun_buf malloc failed exit\n");
 		return 0;
@@ -385,19 +386,21 @@ int main(int argc, char* argv[])
 			if((fds[0].revents & POLLIN) ==  POLLIN){ // tun/tap device
 				//read data from tun/tap device
 				st_buff_clear(&tun_buf);
-				tun_buf.buffer[0] = P_DATA_V2 << 3;
-				tun_buf.len++;
-				tun_buf.len += read(fds[0].fd, tun_buf.buffer+1, tun_buf.capacity-1);
-				if (tun_buf.len < 0) {
+				tun_cnt = read(fds[0].fd, buf, BUFF_LEN);
+				if (tun_cnt < 0) {
 					perror("Reading from interface");
 					close(tun_fd);
 					exit(1);
 				}
-				printf("read %d bytes from %s\n", tun_buf.len, ifr.ifr_name);
+				printf("read %d bytes from %s\n", tun_cnt, ifr.ifr_name);
+
+				//pack data
+			    pack_packet(&tun_buf, buf, tun_cnt, P_DATA_V2);
 
 				//send data to socket
-				sock_cnt = sendto(fds[1].fd, tun_buf.data,tun_buf.len,0,
+				sock_cnt = sendto(fds[1].fd, tun_buf.buffer, tun_buf.len,0,
 						(struct sockaddr*)&dst_addr, sizeof(dst_addr)); 
+
 				printf("write %d bytes to [%s:%d]\n",sock_cnt,inet_ntoa(dst_addr.sin_addr),
 						ntohs(dst_addr.sin_port));
 			}else if((fds[1].revents & POLLIN) ==  POLLIN){ //socket
@@ -419,6 +422,7 @@ int main(int argc, char* argv[])
 				unsigned char opcode = parse_packet(&sock_buf);
 				switch(opcode){
 					case P_CONTROL_HARD_RESET_CLIENT_V2:
+						if(vpn_mode == mode_client) break; 
 						printf("|----receive the client [%s:%d]----|\n",
 								inet_ntoa(src_addr.sin_addr),ntohs(src_addr.sin_port)); 
 						hi_client[0] = P_CONTROL_HARD_RESET_SERVER_V2 << 3;
