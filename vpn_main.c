@@ -26,7 +26,7 @@
 struct ifreq ifr;
 //char client_info[info_size];
 
-
+/********************************************/
 #define   MAX_PARAM   2
 #define   STAT_START  0
 #define   STAT_PRE    1
@@ -98,6 +98,7 @@ static int  parse_cmd(vpn_setting_p setting, char*p[]){
 	}
 }
 
+/********************************************/
 #define  BUFF_LEN    2048
 typedef struct _buff_ {
 	int capacity;
@@ -156,7 +157,7 @@ struct ip_hdr {
 	/*The options start here. */
 };
 
-
+/********************************************/
 static unsigned char parse_packet(st_buff_p buff){
 	unsigned char opcode = *(buff->data) >> 3;
 	buff->data++;
@@ -188,7 +189,56 @@ static char pack_packet(st_buff_p buff, unsigned char* data, int len, unsigned c
 	return -1;
 }
 
+/********************************************/
+typedef struct _client_info_ {
+	struct sockaddr_in  src_addr;
+	uint32_t v_src;
+}client_info, *client_info_p;
 
+#define  array_size  10
+typedef struct _all_client_ {
+	int capacity;
+	int len;
+	client_info array[array_size];
+} all_client, *all_client_p;
+
+all_client all;
+
+int all_client_init(all_client_p p){
+	p->capacity = array_size;
+	p->len = 0;
+	memset(p->array, 0, sizeof(client_info) * array_size);
+}
+
+int client_insert(all_client_p all, struct sockaddr_in src, uint32_t v_src){
+	for(int i=0; i<all->len; i++){
+		if((all->array)[i].src_addr.sin_addr.s_addr == src.sin_addr.s_addr){
+			printf("client is already in client list!\n");
+			return -1;
+		}
+	}
+
+	if(all->len < all->capacity){
+		(all->array)[all->len].src_addr = src;
+		(all->array)[all->len].v_src = v_src;
+		all->len++;
+		return 0;
+	}
+	return -1;
+}
+
+int client_print(all_client_p all){
+	printf(" all->capactiy = %d\n\
+			all->len = %d \n", all->capacity,  all->len);
+
+	for(int i=0; i<all->len; i++){
+		printf("client %d is [%s:%#.8x] \n", i, inet_ntoa((all->array)[i].src_addr.sin_addr), 
+				(all->array)[i].v_src);
+	}
+}
+
+
+/********************************************/
 static int tun_alloc(int flags)
 {
 	int fd, err;
@@ -289,6 +339,7 @@ int main(int argc, char* argv[])
 	char hi_client[56]={0};
 	char hi_server[56]={0};
 
+
 	st_buff sock_buf;  
 	if(st_buff_init(&sock_buf) < 0){
 		printf("sock_buf malloc failed exit\n");
@@ -304,6 +355,8 @@ int main(int argc, char* argv[])
 
 	if(strcmp("server", msetting.vpn_mode) == 0)
 	{
+		all_client_init(&all);
+
 		vpn_mode = mode_server;//server
 		server_fd = socket(AF_INET, SOCK_DGRAM, 0); //AF_INET:IPV4;SOCK_DGRAM:UDP
 		if(server_fd < 0)
@@ -395,7 +448,7 @@ int main(int argc, char* argv[])
 				printf("read %d bytes from %s\n", tun_cnt, ifr.ifr_name);
 
 				//pack data
-			    pack_packet(&tun_buf, buf, tun_cnt, P_DATA_V2);
+				pack_packet(&tun_buf, buf, tun_cnt, P_DATA_V2);
 
 				//send data to socket
 				sock_cnt = sendto(fds[1].fd, tun_buf.buffer, tun_buf.len,0,
@@ -430,6 +483,13 @@ int main(int argc, char* argv[])
 						sendto(fds[1].fd, hi_client,strlen(hi_client),0,
 								(struct sockaddr*)&src_addr, sizeof(src_addr));
 						dst_addr = src_addr;
+
+						struct ip_hdr *ip_header =(struct ip_hdr*)sock_buf.data;
+						//			printf("saddr = %#.8x\n", ip_header->saddr);
+						//			printf("daddr = %#.8x\n", ip_header->daddr);
+
+						client_insert(&all, src_addr, ip_header->daddr);
+						client_print(&all);
 						continue;
 						break;
 					case P_CONTROL_HARD_RESET_SERVER_V2:
@@ -439,10 +499,6 @@ int main(int argc, char* argv[])
 					default:
 						break;
 				}
-
-				struct ip_hdr *ip_header =(struct ip_hdr*)sock_buf.data;
-				printf("saddr = %#.8x\n", ip_header->saddr);
-				printf("daddr = %#.8x\n", ip_header->daddr);
 
 				//send data to tun/tap device
 				tun_cnt = write(fds[0].fd, sock_buf.data, sock_buf.len);
