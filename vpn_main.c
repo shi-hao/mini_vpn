@@ -26,7 +26,9 @@
 struct ifreq ifr;
 //char client_info[info_size];
 
-/********************************************/
+
+////////////////////////////////////////////
+/*  配置文件相关读写接口 */
 #define   MAX_PARAM   2
 #define   STAT_START  0
 #define   STAT_PRE    1
@@ -98,7 +100,8 @@ static int  parse_cmd(vpn_setting_p setting, char*p[]){
 	}
 }
 
-/********************************************/
+//////////////////////////////////////////////////
+/*  缓存结构体 */
 #define  BUFF_LEN    2048
 typedef struct _buff_ {
 	int capacity;
@@ -129,7 +132,8 @@ int st_buff_clear(st_buff_p buff){
 int st_buff_free(st_buff_p buff){
 	free(buff->buffer);
 }
-
+/////////////////////////////////////////////////////////////
+/*  通信协议解析相关接口 */
 #define  P_CONTROL_HARD_RESET_CLIENT_V2   7     /* initial key from client, forget previous state */
 #define  P_CONTROL_HARD_RESET_SERVER_V2   8
 #define  P_DATA_V2                        9
@@ -157,7 +161,6 @@ struct ip_hdr {
 	/*The options start here. */
 };
 
-/********************************************/
 static unsigned char parse_packet(st_buff_p buff){
 	unsigned char opcode = *(buff->data) >> 3;
 	buff->data++;
@@ -188,8 +191,8 @@ static char pack_packet(st_buff_p buff, unsigned char* data, int len, unsigned c
 	}
 	return -1;
 }
-
-/********************************************/
+//////////////////////////////////////////////////////////////
+/*  client信息存储相关结构 */
 typedef struct _client_info_ {
 	struct sockaddr_in  src_addr;
 	uint32_t v_src;
@@ -236,9 +239,8 @@ int client_print(all_client_p all){
 				(all->array)[i].v_src);
 	}
 }
-
-
-/********************************************/
+///////////////////////////////////////////////////////////////////////
+/*  创建虚拟网卡设备接口 */
 static int tun_alloc(int flags)
 {
 	int fd, err;
@@ -258,7 +260,7 @@ static int tun_alloc(int flags)
 	printf("open tun/tap device: %s for reading...\n", ifr.ifr_name);
 	return fd;
 }
-
+////////////////////////////////////////////////////////////////
 
 /*
  * mini vpn main
@@ -416,7 +418,7 @@ int main(int argc, char* argv[])
 		dst_addr = server_addr;
 	}
 	////////////////////////////////////////////////////////
-	/*linux io multiplexing poll(): tun/tap fd and udp socket fd*/
+	/* linux io multiplexing poll(): tun/tap fd and udp socket fd */
 #define  nfds            2
 #define  poll_time      -1
 	int fd, poll_ret;
